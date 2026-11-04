@@ -1,0 +1,338 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Interactive Office Floor Plan</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #f3f5f7; color: #182230; font-family: Arial, sans-serif; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+    header { background: white; padding: 12px 20px; border-bottom: 1px solid #ddd; display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-shrink: 0; }
+    h1 { font-size: 18px; margin: 0; }
+    .sub { font-size: 12px; color: #667085; margin-top: 4px; }
+    button { font-size: 13px; padding: 8px 14px; border: 1px solid #d0d5dd; border-radius: 8px; background: white; color: #344054; cursor: pointer; font-weight: 500; }
+    button:hover { border-color: #087e78; color: #087e78; }
+    
+    main { flex: 1; padding: 12px; position: relative; }
+    .viewer { width: 100%; height: 100%; background: #e5e7eb; border: 1px solid #d8dde3; border-radius: 12px; position: relative; overflow: hidden; }
+    .stage { height: 100%; width: 100%; overflow: hidden; position: relative; touch-action: none; cursor: grab; }
+    .stage.drag { cursor: grabbing; }
+    .canvas { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%) scale(1); transform-origin: center; transition: transform 0.05s ease-out; }
+    .plan-wrapper { position: relative; display: inline-block; }
+    .plan { display: block; max-height: 80vh; max-width: none; pointer-events: none; user-select: none; }
+    
+    /* SVG Overlay & Invisible Default Areas */
+    .svg-overlay {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+    }
+    .clickable-area {
+      fill: transparent;
+      stroke: transparent;
+      stroke-width: 3;
+      cursor: pointer;
+      pointer-events: auto;
+      transition: fill 0.25s ease, stroke 0.25s ease;
+    }
+    
+    /* Hover state: Fades in highlight overlay */
+    .clickable-area:hover, .clickable-area.active {
+      fill: rgba(8, 126, 120, 0.35);
+      stroke: #087e78;
+    }
+
+    .toolbar { position: absolute; z-index: 5; top: 12px; left: 12px; display: flex; align-items: center; gap: 6px; background: #ffffffed; padding: 6px 10px; border: 1px solid #ddd; border-radius: 9px; box-shadow: 0 2px 5px rgba(0,0,0,0.05); }
+    .toolbar button { padding: 6px 10px; }
+    .zoom { font-size: 13px; min-width: 48px; text-align: center; font-weight: bold; }
+    .hint { position: absolute; bottom: 12px; left: 12px; background: #ffffffed; padding: 8px 12px; border: 1px solid #ddd; border-radius: 8px; font-size: 12px; color: #475467; box-shadow: 0 2px 5px rgba(0,0,0,0.05); }
+    
+    /* Modal Pop-up */
+    .modalback { display: none; position: fixed; inset: 0; background: rgba(16, 24, 40, 0.6); z-index: 20; align-items: center; justify-content: center; padding: 16px; backdrop-filter: blur(2px); }
+    .modalback.show { display: flex; }
+    .modal { width: min(500px, 100%); background: white; border-radius: 14px; overflow: hidden; box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1); }
+    .modalhead, .modalfoot { padding: 14px 18px; display: flex; justify-content: space-between; align-items: center; gap: 10px; border-bottom: 1px solid #e5e7eb; }
+    .modalhead h3 { font-size: 17px; margin: 0; }
+    .modalhead .muted { font-size: 12px; color: #667085; }
+    .modalbody { padding: 18px; }
+    .preview { width: 100%; height: 260px; object-fit: contain; background: #f8fafc; border: 1px solid #e5e7eb; border-radius: 8px; }
+    .empty { height: 260px; border: 2px dashed #cbd5e1; border-radius: 8px; display: grid; place-items: center; text-align: center; color: #667085; font-size: 14px; padding: 20px; background: #f9fafb; }
+    .modalfoot { border-top: 1px solid #e5e7eb; border-bottom: 0; }
+    .filelabel { font-size: 13px; padding: 8px 14px; border: 1px solid #d0d5dd; border-radius: 8px; background: white; color: #344054; cursor: pointer; font-weight: 500; }
+    .filelabel:hover { border-color: #087e78; color: #087e78; }
+    input[type=file] { display: none; }
+  </style>
+</head>
+<body>
+
+<header>
+  <div>
+    <h1>Interactive Office Floor Plan</h1>
+    <div class="sub">Hover over regions to reveal interactive zones, click to open details</div>
+  </div>
+  <div>
+    <button id="reset">Reset View</button>
+  </div>
+</header>
+
+<main>
+  <div class="viewer">
+    <div class="toolbar">
+      <button id="out">−</button>
+      <span class="zoom" id="zoomText">100%</span>
+      <button id="in">+</button>
+      <button id="fit">Fit</button>
+    </div>
+    
+    <div class="stage" id="stage">
+      <div class="canvas" id="canvas">
+        <div class="plan-wrapper" id="planWrapper">
+          <!-- Fixed PNG Floorplan File Path -->
+          <img class="plan" id="plan" src="floorplan.png" alt="Office Floor Plan">
+          
+          <!-- SVG Overlay mapped to floor plan dimensions (836x1024) -->
+          <svg class="svg-overlay" id="svgOverlay" viewBox="0 0 836 1024" preserveAspectRatio="none">
+            <!-- Main Workstation Desks -->
+            <polygon class="clickable-area" data-id="workstation1" points="280,170 227,170 227,600 280,600" />
+            <polygon class="clickable-area" data-id="workstation2" points="365,170 428,170 428,600 365,600" />
+            <polygon class="clickable-area" data-id="workstation3" points="770,815 875,815 875,855 822,855 822,985 770,985" />
+
+            <!-- Ergonomic Chairs -->
+            <polygon class="clickable-area" data-id="exec_chair" points="827,875 860,875 860,925 827,925" />
+            <polygon class="clickable-area" data-id="chair1" points="175,205 220,205 220,280 175,280" />
+            <polygon class="clickable-area" data-id="chair2" points="175,340 220,340 220,415 175,415" />
+            <polygon class="clickable-area" data-id="chair3" points="175,477 220,477 220,552 175,552" />
+            <polygon class="clickable-area" data-id="chair4" points="320,205 360,205 360,280 320,280" />
+            <polygon class="clickable-area" data-id="chair5" points="320,340 360,340 360,415 320,415"/>
+            <polygon class="clickable-area" data-id="chair6" points="320,477 360,477 360,552 320,552"/>
+            
+            
+            <!-- Reception / Entrance Arc Desk -->
+            <polygon class="clickable-area" data-id="reception" points="730,220 790,180 845,170 900,180 950,220 910,260 880,240 845,235 800,240 770,260" />
+            <polygon class="clickable-area" data-id="reception_chair" points="815,260 870,260 870,315 815,315"/>
+            <polygon class="clickable-area" data-id="divider1" points="485,80 500,80 500,330 485,330"/>
+            <polygon class="clickable-area" data-id="divider2" points="590,470 960,470 960,485 590,485"/>
+            <polygon class="clickable-area" data-id="reception_sofa" points="560,50 760,50 760,180 560,180"/>
+            <polygon class="clickable-area" data-id="dispenser" points="770,50 790,50 790,100 770,100"/>
+            <circle class="clickable-area" data-id="lamp" cx="540" cy="100" r="14"  />
+            
+            
+            <!-- Conference -->
+            <polygon class="clickable-area" data-id="conference" points="680,560 890,560 890,625 680,625" />
+            <polygon class="clickable-area" data-id="chair7" points="690,500 745,500 745,555 690,555"/>
+            <polygon class="clickable-area" data-id="chair8" points="760,500 815,500 815,555 760,555"/>
+            <polygon class="clickable-area" data-id="chair9" points="825,500 875,500 875,555 825,555"/>
+            <polygon class="clickable-area" data-id="chair10" points="690,630 745,630 745,680 690,680"/>
+            <polygon class="clickable-area" data-id="chair11" points="760,630 815,630 815,680 760,680"/>
+            <polygon class="clickable-area" data-id="chair12" points="825,630 875,630 875,680 825,680"/>
+            <polygon class="clickable-area" data-id="chair13" points="615,565 670,565 670,620 615,620"/>
+            <polygon class="clickable-area" data-id="chair14" points="65,400 120,400 120,440 65,440"/>
+            <polygon class="clickable-area" data-id="chair15" points="65,215 120,215 120,255 65,255"/>
+            <polygon class="clickable-area" data-id="television" points="920,520 960,520 960,650 920,650" />
+            
+            <!-- Executive Suite -->
+            <polygon class="clickable-area" data-id="executive_sofa" points="610,765 725,765 725,1050 610,1050" />
+            <polygon class="clickable-area" data-id="wardrobe" points="915,730 960,730 960,900 915,900" />
+            <polygon class="clickable-area" data-id="cabinet3" points="915,905 960,905 960,1025 915,1025" />
+            
+            <!-- Tables -->
+            <polygon class="clickable-area" data-id="working_table" points="175,105 420,105 420,160 175,160" />
+            
+            <!-- Desk Cabinets -->
+            <polygon class="clickable-area" data-id="cabinet1" points="65,260 120,260 120,395 65,395" />
+            <polygon class="clickable-area" data-id="cabinet2" points="750,395 955,395 955,450 750,450" />
+            
+            <!-- Appliances -->
+            <polygon class="clickable-area" data-id="fridge" points="65,615 110,615 110,705 65,705" />
+
+            <!-- Storage -->
+            <polygon class="clickable-area" data-id="rack" points="270,725 320,725 320,1045 270,1045" />
+            <polygon class="clickable-area" data-id="steel_cabinet" points="390,820 490,820 490,1005 390,1005" />
+          </svg>
+        </div>
+      </div>
+    </div>
+    
+    <div class="hint">Scroll / Pinch to zoom • Drag to move • Click furnitures</div>
+  </div>
+</main>
+
+<!-- Modal Pop-up -->
+<div class="modalback" id="back">
+  <div class="modal">
+    <div class="modalhead">
+      <div>
+        <h3 id="title">Item Name</h3>
+        <div class="muted" id="cat">Category</div>
+      </div>
+      <button id="close">✕</button>
+    </div>
+    <div class="modalbody">
+      <div id="imageArea"></div>
+    </div>
+    <div class="modalfoot">
+      <label class="filelabel" for="itemImage">Upload Photo</label>
+      <input id="itemImage" type="file" accept="image/*">
+      <button id="done">Done</button>
+    </div>
+  </div>
+</div>
+
+<script>
+  const itemsData = {
+    workstation1: { name: "Workstations", category: "Main Open Office Area", image: "workstation.png" },
+    workstation2: { name: "Workstations", category: "Main Open Office Area", image: "workstation.png" },
+    workstation3: { name: "Workstations", category: "Main Open Office Area", image: "exec_table.png" },
+    exec_chair: { name: "Office Chair", category: "Ergonomic Office Chair", image: "exec_chair.png" },
+    chair1: { name: "Office Chair", category: "Ergonomic Office Chair", image: "office_chair.png" },
+    chair2: { name: "Office Chair", category: "Ergonomic Office Chair", image: "office_chair.png" },
+    chair3: { name: "Office Chair", category: "Ergonomic Office Chair", image: "office_chair.png" },
+    chair4: { name: "Office Chair", category: "Ergonomic Office Chair", image: "office_chair.png" },
+    chair5: { name: "Office Chair", category: "Ergonomic Office Chair", image: "office_chair.png" },
+    chair6: { name: "Office Chair", category: "Ergonomic Office Chair", image: "office_chair.png" },
+    reception: { name: "Reception Desk", category: "Reception Area", image: "reception_desk.png" },
+    reception_chair: { name: "Reception Chair", category: "Reception Area", image: "reception_chair.png" },
+    conference: { name: "6-Seater Conference Table", category: "Meeting Room", image: "conference_table.png" },
+    chair7: { name: "Conference Chair", category: "Mesh Office Chair", image: "reception_chair.png" },
+    chair8: { name: "Conference Chair", category: "Mesh Office Chair", image: "reception_chair.png" },
+    chair9: { name: "Conference Chair", category: "Mesh Office Chair", image: "reception_chair.png" },
+    chair10: { name: "Conference Chair", category: "Mesh Office Chair", image: "reception_chair.png" },
+    chair11: { name: "Conference Chair", category: "Mesh Office Chair", image: "reception_chair.png" },
+    chair12: { name: "Conference Chair", category: "Mesh Office Chair", image: "reception_chair.png" },
+    chair13: { name: "Conference Chair", category: "Mesh Office Chair", image: "reception_chair.png" },
+    television: { name: "TV Monitor and Drawer", category: "Conference Area", image: "television.png" },
+    chair14: { name: "Office Chair Extra", category: "Mesh Office Chair", image: "reception_chair.png" },
+    chair15: { name: "Office Chair Extra", category: "Mesh Office Chair", image: "reception_chair.png" },
+    executive_sofa: { name: "Sofa Suite & Center Table", category: "Executive Office", image: "exec_sofa.png" },
+    wardrobe: { name: "Office Cabinet", category: "Wardrobe Type Cabinet", image: "wardrobe.png" },
+    cabinet3: { name: "Desk Cabinet", category: "Shelf Cabinet", image: "desk_cabinet3.png" },
+    working_table: { name: "Extended Table with Drawers", category: "Main Open Office Area", image: "working_table.png" },
+    cabinet1: { name: "Desk Cabinet", category: "Cabinets", image: "desk_cabinet1.png" },
+    cabinet2: { name: "Reception Cabinet", category: "Cabinets", image: "desk_cabinet2.png" },
+    cabinet3: { name: "Desk Cabinet", category: "Shelf Cabinet", image: "desk_cabinet3.png" },
+    divider1: { name: "Wall Divider", category: "Reception Area", image: "divider.png" },
+    divider2: { name: "Wall Divider", category: "Reception Area", image: "divider.png" },
+    reception_sofa: { name: "Reception Sofa", category: "Reception Area", image: "reception_sofa.png" },
+    dispenser: { name: "Water Dispenser", category: "Reception Area", image: "dispenser.png" },
+    lamp: { name: "Reception Lamp", category: "Appliances", image: "lamp.png" },
+    fridge: { name: "Refrigerator", category: "Appliances", image: "fridge.png" },
+    rack: { name: "Metal Shelf Rack", category: "Storage", image: "steel_rack.png" },
+    steel_cabinet: { name: "Steel Filing Cabinet", category: "Storage", image: "steel_cabinet.png" }
+  };
+  
+  let selectedItemId = null;
+  let scale = 1;
+  let panX = 0;
+  let panY = 0;
+  let isDragging = false;
+  let startX = 0;
+  let startY = 0;
+
+  const stage = document.getElementById('stage');
+  const canvas = document.getElementById('canvas');
+  const plan = document.getElementById('plan');
+  const svgOverlay = document.getElementById('svgOverlay');
+  const zoomText = document.getElementById('zoomText');
+  const modalBack = document.getElementById('back');
+  const modalTitle = document.getElementById('title');
+  const modalCat = document.getElementById('cat');
+  const imageArea = document.getElementById('imageArea');
+  const itemImageInput = document.getElementById('itemImage');
+
+  function adjustOverlay() {
+    if (plan.naturalWidth && plan.naturalHeight) {
+      svgOverlay.setAttribute('viewBox', `0 0 ${plan.naturalWidth} ${plan.naturalHeight}`);
+    }
+  }
+  plan.onload = adjustOverlay;
+  if (plan.complete) adjustOverlay();
+
+  document.querySelectorAll('.clickable-area').forEach(polygon => {
+    polygon.addEventListener('click', (e) => {
+      e.stopPropagation();
+      openModal(polygon.getAttribute('data-id'));
+    });
+  });
+
+  function openModal(id) {
+    selectedItemId = id;
+    const item = itemsData[id] || { name: "Selected Area", category: "Floorplan Zone", image: "" };
+    modalTitle.innerText = item.name;
+    modalCat.innerText = item.category;
+    updateModalImage(item.image);
+    modalBack.classList.add('show');
+  }
+
+  function updateModalImage(src) {
+    if (src) {
+      imageArea.innerHTML = `<img src="${src}" class="preview" alt="Area Image">`;
+    } else {
+      imageArea.innerHTML = `<div class="empty">No reference photo uploaded yet for this area.</div>`;
+    }
+  }
+
+  document.getElementById('close').addEventListener('click', () => modalBack.classList.remove('show'));
+  document.getElementById('done').addEventListener('click', () => modalBack.classList.remove('show'));
+  modalBack.addEventListener('click', (e) => {
+    if (e.target === modalBack) modalBack.classList.remove('show');
+  });
+
+  itemImageInput.addEventListener('change', (e) => {
+    const file = e.target.files[0];
+    if (file && selectedItemId) {
+      const reader = new FileReader();
+      reader.onload = function(evt) {
+        if (!itemsData[selectedItemId]) itemsData[selectedItemId] = { name: "Custom Zone", category: "Zone", image: "" };
+        itemsData[selectedItemId].image = evt.target.result;
+        updateModalImage(evt.target.result);
+      };
+      reader.readAsDataURL(file);
+    }
+  });
+
+  function updateTransform() {
+    canvas.style.transform = `translate(calc(-50% + ${panX}px), calc(-50% + ${panY}px)) scale(${scale})`;
+    zoomText.innerText = `${Math.round(scale * 100)}%`;
+  }
+
+  function zoom(delta) {
+    if (delta > 0) scale = Math.min(scale * 1.25, 4);
+    else scale = Math.max(scale / 1.25, 0.5);
+    updateTransform();
+  }
+
+  document.getElementById('in').addEventListener('click', () => zoom(1));
+  document.getElementById('out').addEventListener('click', () => zoom(-1));
+  document.getElementById('reset').addEventListener('click', () => { scale = 1; panX = 0; panY = 0; updateTransform(); });
+  document.getElementById('fit').addEventListener('click', () => { scale = 1; panX = 0; panY = 0; updateTransform(); });
+
+  stage.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    zoom(e.deltaY < 0 ? 1 : -1);
+  }, { passive: false });
+
+  stage.addEventListener('mousedown', (e) => {
+    if (e.target.classList.contains('clickable-area')) return;
+    isDragging = true;
+    stage.classList.add('drag');
+    startX = e.clientX - panX;
+    startY = e.clientY - panY;
+  });
+
+  window.addEventListener('mousemove', (e) => {
+    if (!isDragging) return;
+    panX = e.clientX - startX;
+    panY = e.clientY - startY;
+    updateTransform();
+  });
+
+  window.addEventListener('mouseup', () => {
+    isDragging = false;
+    stage.classList.remove('drag');
+  });
+</script>
+</body>
+</html>
